@@ -46,6 +46,11 @@ KEY_REGEX = re.compile(r"^[\w.-]+$")
 GROUP_KEY_REGEX = re.compile(r"^[\w-]+$")
 CAMELCASE_TO_SNAKE_CASE_REGEX = re.compile(r"(?!^)([A-Z]+)")
 
+# Pattern for validating module-qualified keys such as "airflow.providers.google.secret_name".
+# Enforces the convention that hierarchical keys follow Python module naming rules so
+# that keys can be safely resolved through provider configuration namespaces.
+_QUALIFIED_KEY_REGEX = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*\.?)+$")
+
 T = TypeVar("T")
 S = TypeVar("S")
 
@@ -65,6 +70,14 @@ def validate_key(k: str, max_length: int = 250):
         raise AirflowException(
             f"The key {k!r} must not contain consecutive dots ('..') to prevent path traversal"
         )
+    if "." in k:
+        # Validate that dotted keys follow the module-qualified naming convention
+        # so they can be safely resolved through provider configuration namespaces.
+        if not _QUALIFIED_KEY_REGEX.match(k):
+            raise AirflowException(
+                f"The key {k!r} with dots must follow module-qualified naming "
+                f"(e.g. 'provider.section.name')"
+            )
 
 
 def ask_yesno(question: str, default: bool | None = None, output_fn=print) -> bool:
@@ -117,7 +130,7 @@ def is_container(obj) -> bool:
 
 
 def chunks(items: list[T], chunk_size: int) -> Generator[list[T], None, None]:
-    """Yield successive chunks of a given size from a list of items."""
+    """Yield successive non-overlapping chunks of a given size from a list of items."""
     if chunk_size <= 0:
         raise ValueError("Chunk size must be a positive integer")
     for i in range(0, len(items), chunk_size):
