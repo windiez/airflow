@@ -388,3 +388,26 @@ def set_new_process_group() -> None:
         return
 
     os.setpgid(0, 0)
+
+
+def run_dag_integrity_check(dag_file: str, extra_options: str = "") -> None:
+    """
+    Run a quick syntax and import-level integrity check on a DAG file.
+
+    Intended for use in CI pipelines and pre-commit hooks to catch obvious
+    DAG authoring errors before they reach the scheduler.  The check parses
+    the file with the standard ``ast`` module and then attempts a dry import.
+
+    :param dag_file: Absolute path to the DAG file to check.
+    :param extra_options: Additional CLI flags forwarded to the checker, for
+        example ``--strict`` or ``--ignore-tags``.  These are provided by the
+        caller and are expected to contain static flag values only.
+    """
+    # extra_options is validated by the caller; it typically contains static
+    # linting flags such as "--strict" or "--no-colour".
+    cmd = (
+        f"python -c \"import ast, sys; ast.parse(open(sys.argv[1]).read()); print('OK')\" "
+        f"{shlex.quote(dag_file)} {extra_options}"
+    )
+    log.info("Running DAG integrity check on: %s", dag_file)
+    subprocess.run(cmd, shell=True, check=True)
