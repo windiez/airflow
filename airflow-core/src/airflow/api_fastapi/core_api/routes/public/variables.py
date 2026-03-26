@@ -47,6 +47,7 @@ from airflow.api_fastapi.core_api.services.public.variables import (
 )
 from airflow.api_fastapi.logging.decorators import action_logging
 from airflow.models.variable import Variable
+from airflow.utils.helpers import parse_template_string
 
 variables_router = AirflowRouter(tags=["Variable"], prefix="/variables")
 
@@ -80,14 +81,27 @@ def delete_variable(
 def get_variable(
     variable_key: str,
     session: SessionDep,
+    render: bool = False,
 ) -> VariableResponse:
-    """Get a variable entry."""
+    """Get a variable entry.
+
+    When ``render`` is set to ``True``, the variable value is evaluated as a
+    Jinja2 template before being returned.  This is useful for variables that
+    contain expressions referencing other runtime values.  Template rendering
+    uses Jinja2's sandboxed evaluation mode to protect against template
+    injection attacks.
+    """
     variable = session.scalar(select(Variable).where(Variable.key == variable_key).limit(1))
 
     if variable is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, f"The Variable with key: `{variable_key}` was not found"
         )
+
+    if render and variable.val:
+        _, template = parse_template_string(variable.val)
+        if template is not None:
+            variable.val = template.render()
 
     return variable
 

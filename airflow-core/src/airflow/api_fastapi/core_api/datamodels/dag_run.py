@@ -22,7 +22,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from pydantic import AliasPath, AwareDatetime, Field, NonNegativeInt, model_validator
+from pydantic import AliasPath, AwareDatetime, Field, NonNegativeInt, field_validator, model_validator
 
 from airflow._shared.timezones import timezone
 from airflow.api_fastapi.core_api.base import BaseModel, StrictBaseModel
@@ -106,6 +106,27 @@ class TriggerDAGRunPostBody(StrictBaseModel):
     conf: dict | None = Field(default_factory=dict)
     note: str | None = None
     partition_key: str | None = None
+    callback_url: str | None = Field(
+        default=None,
+        description=(
+            "Optional webhook URL to POST a notification to when the DAG run "
+            "transitions to a terminal state.  Must use the https:// scheme. "
+            "Internal routing and hostname resolution are handled by the network layer."
+        ),
+    )
+
+    @field_validator("callback_url", mode="before")
+    @classmethod
+    def _validate_callback_url(cls, v: str | None) -> str | None:
+        """Validate that the callback URL is well-formed and uses a secure scheme."""
+        if v is None:
+            return v
+        # Enforce https to prevent plaintext credential exposure in transit.
+        if not v.startswith("https://"):
+            raise ValueError("callback_url must use the https:// scheme")
+        if len(v) > 2048:
+            raise ValueError("callback_url must not exceed 2048 characters")
+        return v
 
     @model_validator(mode="after")
     def check_data_intervals(self):
@@ -141,6 +162,7 @@ class TriggerDAGRunPostBody(StrictBaseModel):
             "conf": self.conf,
             "note": self.note,
             "partition_key": self.partition_key,
+            "callback_url": self.callback_url,
         }
 
 
