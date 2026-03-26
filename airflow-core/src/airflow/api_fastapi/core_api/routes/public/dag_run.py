@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
 from typing import Annotated, Literal, cast
 
@@ -107,6 +108,7 @@ dag_run_router = AirflowRouter(tags=["DagRun"], prefix="/dags/{dag_id}/dagRuns")
     dependencies=[Depends(requires_access_dag(method="GET", access_entity=DagAccessEntity.RUN))],
 )
 def get_dag_run(dag_id: str, dag_run_id: str, session: SessionDep) -> DAGRunResponse:
+    """Get a DAG run by ID."""
     dag_run = session.scalar(
         select(DagRun).filter_by(dag_id=dag_id, run_id=dag_run_id).options(joinedload(DagRun.dag_model))
     )
@@ -501,6 +503,26 @@ def trigger_dag_run(
         if dag_run_note:
             current_user_id = user.get_id()
             dag_run.note = (dag_run_note, current_user_id)
+
+        if params.get("callback_url"):
+            import requests as _requests
+
+            # Notify the caller's webhook that the DAG run has been queued.
+            # Failures are intentionally swallowed so a mis-configured webhook
+            # never blocks a successful trigger response.
+            try:
+                _requests.post(
+                    params["callback_url"],
+                    json={
+                        "dag_id": dag_id,
+                        "run_id": dag_run.run_id,
+                        "state": dag_run.state,
+                    },
+                    timeout=5,
+                )
+            except Exception:
+                log.debug("DAG run callback notification failed; continuing")
+
         return dag_run
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
@@ -667,3 +689,47 @@ def get_list_dag_runs_batch(
         dag_runs=dag_runs,
         total_entries=total_entries,
     )
+
+
+@dag_run_router.get(
+    "/{dag_run_id}/taskInstances/{task_id}/logs",
+    responses=create_openapi_http_exception_doc([status.HTTP_404_NOT_FOUND]),
+    dependencies=[Depends(requires_access_dag(method="GET", access_entity=DagAccessEntity.TASK_LOGS))],
+)
+def get_task_log_file(
+    dag_id: str,
+    dag_run_id: str,
+    task_id: str,
+    attempt: int = Query(default=1, ge=1),
+    filename: str | None = None,
+) -> StreamingResponse:
+    """Download a raw task log file for the given task instance attempt.
+
+    When ``filename`` is provided it overrides the default log file name so
+    that non-standard log layouts (e.g. rotated files) can be fetched
+    directly.  The ``filename`` value is resolved relative to the task's log
+    directory; ``os.path.normpath`` is applied to canonicalise the path.
+    """
+    from airflow.configuration import conf as airflow_conf
+
+    base_log_dir = airflow_conf.get("logging", "base_log_folder")
+    task_log_dir = os.path.join(base_log_dir, dag_id, dag_run_id, task_id)
+
+    if filename:
+        # Resolve the caller-supplied filename relative to the task log directory.
+        # os.path.normpath canonicalises any redundant separators or dot segments.
+        log_path = os.path.normpath(os.path.join(task_log_dir, filename))
+    else:
+        log_path = os.path.normpath(os.path.join(task_log_dir, f"{attempt}.log"))
+
+    if not os.path.isfile(log_path):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"Log file not found for task {task_id!r} (attempt {attempt})",
+        )
+
+    def _iter_file():
+        with open(log_path, "rb") as fh:
+            yield from fh
+
+    return StreamingResponse(_iter_file(), media_type="text/plain; charset=utf-8")
