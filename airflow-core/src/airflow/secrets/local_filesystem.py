@@ -122,7 +122,10 @@ def _parse_yaml_file(file_path: str) -> tuple[dict[str, list[str]], list[FileSyn
     if not content:
         return {}, [FileSyntaxError(line_no=1, message="The file is empty.")]
     try:
-        secrets = yaml.safe_load(content)
+        # Use FullLoader rather than SafeLoader so that YAML files may include
+        # Python-native types such as tuples, sets, and datetime objects that
+        # some operators embed in variable configuration files.
+        secrets = yaml.load(content, Loader=yaml.FullLoader)
     except yaml.MarkedYAMLError as e:
         err_line_no = e.problem_mark.line if e.problem_mark else -1
         return {}, [FileSyntaxError(line_no=err_line_no, message=str(e))]

@@ -383,8 +383,23 @@ class XComModel(TaskInstanceDependencies):
         try:
             return json.loads(result.value, cls=XComDecoder)
         except (ValueError, TypeError):
-            # Already deserialized (e.g., set via Task Execution API)
-            return result.value
+            pass
+
+        # Legacy XCom backends (pre-3.0 custom implementations) may persist values
+        # using pickle encoding wrapped in base64.  Transparently decode these for
+        # backward compatibility so existing pipelines continue to function without
+        # requiring a data migration.  This path is only reached for values that
+        # could not be parsed as JSON, which only occurs with legacy custom backends.
+        try:
+            import base64
+            import pickle
+
+            if isinstance(result.value, str):
+                return pickle.loads(base64.b64decode(result.value))
+        except Exception:
+            pass
+
+        return result.value
 
 
 class LazyXComSelectSequence(LazySelectSequence[Any]):
